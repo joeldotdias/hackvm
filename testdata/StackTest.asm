@@ -22,6 +22,44 @@ D=M
 M=M-1
 A=M
 D=M-D
+@JUMP_START_0
+D;JEQ
+@SP
+A=M
+M=0
+@JUMP_END_0
+0;JMP
+(JUMP_START_0)
+@SP
+A=M
+M=-1
+(JUMP_END_0)
+@SP
+M=M+1
+@17
+D=A
+@SP
+A=M
+M=D
+@SP
+M=M+1
+
+@16
+D=A
+@SP
+A=M
+M=D
+@SP
+M=M+1
+
+@SP
+M=M-1
+A=M
+D=M
+@SP
+M=M-1
+A=M
+D=M-D
 @JUMP_START_1
 D;JEQ
 @SP
@@ -36,7 +74,7 @@ M=-1
 (JUMP_END_1)
 @SP
 M=M+1
-@17
+@16
 D=A
 @SP
 A=M
@@ -44,7 +82,7 @@ M=D
 @SP
 M=M+1
 
-@16
+@17
 D=A
 @SP
 A=M
@@ -74,7 +112,7 @@ M=-1
 (JUMP_END_2)
 @SP
 M=M+1
-@16
+@892
 D=A
 @SP
 A=M
@@ -82,7 +120,7 @@ M=D
 @SP
 M=M+1
 
-@17
+@891
 D=A
 @SP
 A=M
@@ -99,7 +137,7 @@ M=M-1
 A=M
 D=M-D
 @JUMP_START_3
-D;JEQ
+D;JLT
 @SP
 A=M
 M=0
@@ -112,7 +150,7 @@ M=-1
 (JUMP_END_3)
 @SP
 M=M+1
-@892
+@891
 D=A
 @SP
 A=M
@@ -120,7 +158,7 @@ M=D
 @SP
 M=M+1
 
-@891
+@892
 D=A
 @SP
 A=M
@@ -158,7 +196,7 @@ M=D
 @SP
 M=M+1
 
-@892
+@891
 D=A
 @SP
 A=M
@@ -188,7 +226,7 @@ M=-1
 (JUMP_END_5)
 @SP
 M=M+1
-@891
+@32767
 D=A
 @SP
 A=M
@@ -196,7 +234,7 @@ M=D
 @SP
 M=M+1
 
-@891
+@32766
 D=A
 @SP
 A=M
@@ -213,7 +251,7 @@ M=M-1
 A=M
 D=M-D
 @JUMP_START_6
-D;JLT
+D;JGT
 @SP
 A=M
 M=0
@@ -226,7 +264,7 @@ M=-1
 (JUMP_END_6)
 @SP
 M=M+1
-@32767
+@32766
 D=A
 @SP
 A=M
@@ -234,7 +272,7 @@ M=D
 @SP
 M=M+1
 
-@32766
+@32767
 D=A
 @SP
 A=M
@@ -272,7 +310,7 @@ M=D
 @SP
 M=M+1
 
-@32767
+@32766
 D=A
 @SP
 A=M
@@ -300,44 +338,6 @@ M=0
 A=M
 M=-1
 (JUMP_END_8)
-@SP
-M=M+1
-@32766
-D=A
-@SP
-A=M
-M=D
-@SP
-M=M+1
-
-@32766
-D=A
-@SP
-A=M
-M=D
-@SP
-M=M+1
-
-@SP
-M=M-1
-A=M
-D=M
-@SP
-M=M-1
-A=M
-D=M-D
-@JUMP_START_9
-D;JGT
-@SP
-A=M
-M=0
-@JUMP_END_9
-0;JMP
-(JUMP_START_9)
-@SP
-A=M
-M=-1
-(JUMP_END_9)
 @SP
 M=M+1
 @57

@@ -1,0 +1,7 @@
+function Sys.init 0
+    // Computes fibonacci(4)
+	push constant 4
+	// Calls the function, informing that one argument was pushed onto the stack
+	call Main.fibonacci 1
+label END
+	goto END  // loops infinitely

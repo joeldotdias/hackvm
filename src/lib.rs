@@ -1,6 +1,17 @@
-use std::str::FromStr;
+use std::{
+    fs::File,
+    io::{self, BufWriter, Write},
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
-static mut NEXTJUMP: u32 = 0;
+#[derive(Debug)]
+pub struct VMTranslator<W: Write> {
+    writer: BufWriter<W>,
+    next_jump: u16,
+    ret_idx: u16,
+    filestem: String,
+}
 
 #[derive(Debug)]
 pub enum MemorySegment {
@@ -16,8 +27,9 @@ pub enum MemorySegment {
 
 #[derive(Debug)]
 pub enum Command {
-    Push { segment: MemorySegment, offset: u16 },
-    Pop { segment: MemorySegment, offset: u16 },
+    /* Syntax: push / pop <segment> <offset> */
+    Push(MemorySegment, u16),
+    Pop(MemorySegment, u16),
 
     Add,
     Sub,
@@ -30,58 +42,53 @@ pub enum Command {
     Lt,
     Gt,
 
-    Label,
-    Goto,
-    If,
-    Function,
+    /* Syntax: label / goto / if-goto <label_name> */
+    Label(String),
+    Goto(String),
+    IfGoto(String),
+
+    /* Syntax: function <function_name> <nVars - no. of local vars in the function> */
+    Function(String, u16),
+    /* Syntax: call <function_name> <nArgs - no. of arguments taken by the called function> */
+    Call(String, u16),
+
     Return,
-    Call,
 }
 
-pub fn parse(line: &str) -> Result<Command, String> {
-    let parts: Vec<_> = line.split_whitespace().collect();
-    let command = match parts[0] {
-        "push" => Command::Push {
-            segment: MemorySegment::from_str(parts[1])?,
-            offset: parts[2].parse::<u16>().map_err(|e| e.to_string())?,
-        },
+impl VMTranslator<File> {
+    pub fn new(inpath: &Path) -> io::Result<Self> {
+        let outpath = inpath.with_extension("asm");
+        let outfile = File::create(outpath)?;
+        let writer = BufWriter::new(outfile);
+        let filestem = inpath
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap()
+            .to_owned();
 
-        "pop" => Command::Pop {
-            segment: MemorySegment::from_str(parts[1])?,
-            offset: parts[2].parse::<u16>().map_err(|e| e.to_string())?,
-        },
-
-        "add" => Command::Add,
-        "sub" => Command::Sub,
-        "neg" => Command::Neg,
-        "not" => Command::Not,
-        "or" => Command::Or,
-        "and" => Command::And,
-        "eq" => Command::Eq,
-        "lt" => Command::Lt,
-        "gt" => Command::Gt,
-
-        _ => return Err(format!("Unknown command {}", parts[0])),
-    };
-
-    Ok(command)
+        Ok(VMTranslator {
+            writer,
+            next_jump: 0,
+            ret_idx: 0,
+            filestem,
+        })
+    }
 }
 
-impl Command {
-    pub fn to_asm(&self, filename: &str) -> String {
-        self.verify_offset();
+impl<W: Write> VMTranslator<W> {
+    pub fn write_asm(&mut self, command: Command) -> io::Result<()> {
+        command.verify_offset();
 
-        match self {
-            Command::Push { segment, offset } => match segment {
+        let asm = match command {
+            Command::Push(segment, offset) => match segment {
                 MemorySegment::Constant => format!("@{}\nD=A\n@SP\nA=M\nM=D\n@SP\nM=M+1\n", offset),
                 MemorySegment::Static => {
-                    let mut static_label = filename.to_owned();
-                    static_label.push_str(&format!(".{}", offset));
-                    format!("@{}\nD=M\n@SP\nA=M\nM=D\n@SP\n@SP\nM=M+1\n", static_label)
+                    let static_label = format!("{}.{}", self.filestem, offset);
+                    format!("@{}\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n", static_label)
                 }
                 MemorySegment::Temp => format!("@{}\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n", 5 + offset),
                 MemorySegment::Pointer => {
-                    if *offset == 0 {
+                    if offset == 0 {
                         format!("@THIS\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n")
                     } else {
                         format!("@THAT\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n")
@@ -95,15 +102,14 @@ impl Command {
                 ),
             },
 
-            Command::Pop { segment, offset } => match segment {
+            Command::Pop(segment, offset) => match segment {
                 MemorySegment::Static => {
-                    let mut static_label = filename.to_owned();
-                    static_label.push_str(&format!(".{}", offset));
+                    let static_label = format!("{}.{}", self.filestem, offset);
                     format!("@SP\nM=M-1\nA=M\nD=M\n@{}\nM=D\n", static_label)
                 }
                 MemorySegment::Temp => format!("@SP\nM=M-1\nA=M\nD=M\n@{}\nM=D\n", 5 + offset),
                 MemorySegment::Pointer => {
-                    if *offset == 0 {
+                    if offset == 0 {
                         format!("@SP\nM=M-1\nA=M\nD=M\n@THIS\nM=D\n")
                     } else {
                         format!("@SP\nM=M-1\nA=M\nD=M\n@THAT\nM=D\n")
@@ -114,7 +120,8 @@ impl Command {
                 }
 
                 _ => format!(
-                    "@{}\nD=M\n@13\nM=D\n@{}\nD=A\n@13\nM=D+M\n@SP\nM=M-1\nA=M\nD=M\n@13\nA=M\nM=D\n",
+                    "@{}\nD=M\n@R13\nM=D\n@{}\nD=A\n@R13\nM=D+M\n\
+                    @SP\nM=M-1\nA=M\nD=M\n@R13\nA=M\nM=D\n",
                     segment.to_label(),
                     offset,
                 ),
@@ -127,44 +134,187 @@ impl Command {
             Command::Not => format!("@SP\nM=M-1\nA=M\nM=!M\n@SP\nM=M+1\n"),
             Command::Or => format!("@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nM=D|M\n@SP\nM=M+1\n"),
             Command::And => format!("@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nM=D&M\n@SP\nM=M+1\n"),
+
             Command::Eq => {
-                let (jump_start, jump_end) = jump_labels();
+                let (jump_start, jump_end) = self.jump_labels();
+                self.next_jump += 1;
+
                 format!(
-                    "@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nD=M-D\n@{}\nD;JEQ\n@SP\nA=M\nM=0\n@{}\n0;JMP\n({})\n@SP\nA=M\nM=-1\n({})\n@SP\nM=M+1",
-                    jump_start,
-                    jump_end,
-                    jump_start,
-                    jump_end
+                    "@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nD=M-D\n\
+                    @{}\nD;JEQ\n@SP\nA=M\nM=0\n\
+                    @{}\n0;JMP\n\
+                    ({})\n@SP\nA=M\nM=-1\n\
+                    ({})\n@SP\nM=M+1",
+                    jump_start, jump_end, jump_start, jump_end
                 )
             }
             Command::Lt => {
-                let (jump_start, jump_end) = jump_labels();
+                let (jump_start, jump_end) = self.jump_labels();
+                self.next_jump += 1;
+
                 format!(
-                    "@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nD=M-D\n@{}\nD;JLT\n@SP\nA=M\nM=0\n@{}\n0;JMP\n({})\n@SP\nA=M\nM=-1\n({})\n@SP\nM=M+1",
-                    jump_start,
-                    jump_end,
-                    jump_start,
-                    jump_end
+                    "@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nD=M-D\n\
+                    @{}\nD;JLT\n@SP\nA=M\nM=0\n\
+                    @{}\n0;JMP\n\
+                    ({})\n@SP\nA=M\nM=-1\n\
+                    ({})\n@SP\nM=M+1",
+                    jump_start, jump_end, jump_start, jump_end
                 )
             }
             Command::Gt => {
-                let (jump_start, jump_end) = jump_labels();
+                let (jump_start, jump_end) = self.jump_labels();
+                self.next_jump += 1;
+
                 format!(
-                    "@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nD=M-D\n@{}\nD;JGT\n@SP\nA=M\nM=0\n@{}\n0;JMP\n({})\n@SP\nA=M\nM=-1\n({})\n@SP\nM=M+1",
-                    jump_start,
-                    jump_end,
-                    jump_start,
-                    jump_end
+                    "@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nD=M-D\n\
+                    @{}\nD;JGT\n@SP\nA=M\nM=0\n\
+                    @{}\n0;JMP\n\
+                    ({})\n@SP\nA=M\nM=-1\n\
+                    ({})\n@SP\nM=M+1",
+                    jump_start, jump_end, jump_start, jump_end
                 )
             }
 
-            _ => unimplemented!(),
-        }
+            Command::Function(name, n_local_vars) => {
+                let mut func_asm = format!("({})\n", name);
+                for _ in 0..n_local_vars {
+                    func_asm.push_str(&format!("@SP\nA=M\nM=0\n@SP\nM=M+1\n"));
+                }
+
+                func_asm
+            }
+
+            Command::Call(func_name, n_args) => self.translate_func_call(func_name, n_args),
+
+            Command::Return => {
+                /*
+                 * Copy LCL to R13
+                 * Store return addr in R14
+                 * Move return val to arg 0
+                 * Move SP to *ARG + 1
+                 * Restore THIS, THAT, ARG, LCL pointers
+                 * Uncoditional jump to return addr
+                 */
+                format!(
+                    "@LCL\nD=M\n@R13\nM=D\n\
+                    @5\nD=D-A\nA=D\nD=M\n@R14\nM=D\n\
+                    @SP\nM=M-1\nA=M\nD=M\n@ARG\nA=M\nM=D\n\
+                    @ARG\nD=M+1\n@SP\nM=D\n\
+                    @R13\nD=M\n@1\nD=D-A\nA=D\nD=M\n@THAT\nM=D\n\
+                    @R13\nD=M\n@2\nD=D-A\nA=D\nD=M\n@THIS\nM=D\n\
+                    @R13\nD=M\n@3\nD=D-A\nA=D\nD=M\n@ARG\nM=D\n\
+                    @R13\nD=M\n@4\nD=D-A\nA=D\nD=M\n@LCL\nM=D\n\
+                    @R14\nA=M\n0;JMP\n"
+                )
+            }
+
+            Command::Label(label) => format!("({})\n", label),
+            Command::Goto(label) => format!("@{}\n0;JMP\n", label),
+            Command::IfGoto(label) => format!("@SP\nM=M-1\nA=M\nD=M\n@{}\nD;JNE\n", label),
+        };
+
+        writeln!(self.writer, "{}", asm)?;
+
+        Ok(())
     }
 
+    pub fn translate_func_call(&mut self, func_name: String, n_args: u16) -> String {
+        let ret_addr = format!("{}$ret.{}", func_name, self.ret_idx);
+        self.ret_idx += 1;
+
+        /* save current function frame */
+        // return address in the ROM
+        let mut call_asm = format!("@{}\nD=A\n@SP\nA=M\nM=D\n@SP\nM=M+1\n", ret_addr);
+
+        // recording segment pointers
+        ["LCL", "ARG", "THIS", "THAT"].iter().for_each(|segment| {
+            call_asm.push_str(&format!("@{}\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n", segment));
+        });
+
+        // setting LCL to SP
+        call_asm.push_str(&format!("@SP\nD=M\n@LCL\nM=D\n"));
+        // setting arg 0 to first arg pushed onto stack
+        call_asm.push_str(&format!(
+            "@SP\nD=M\n@{}\nD=D-A\n@5\nD=D-A\n@ARG\nM=D\n",
+            n_args
+        ));
+
+        call_asm.push_str(&format!("@{}\n0;JMP\n", func_name));
+        call_asm.push_str(&format!("({})\n", ret_addr));
+
+        call_asm
+    }
+
+    pub fn write_prelude(&mut self) -> io::Result<()> {
+        writeln!(self.writer, "@256\nD=A\n@SP\nM=D\n\n")?;
+        let sys_init = self.translate_func_call("Sys.init".into(), 0);
+        writeln!(self.writer, "{}", sys_init)?;
+        Ok(())
+    }
+
+    pub fn update_filestem(&mut self, curr_file: &PathBuf) {
+        self.filestem = curr_file
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap()
+            .to_owned();
+    }
+
+    fn jump_labels(&self) -> (String, String) {
+        (
+            format!("JUMP_START_{}", self.next_jump),
+            format!("JUMP_END_{}", self.next_jump),
+        )
+    }
+}
+
+pub fn parse(line: &str) -> Result<Command, String> {
+    let parts: Vec<_> = line.split_whitespace().collect();
+    let command = match parts[0] {
+        "push" => Command::Push(
+            MemorySegment::from_str(parts[1])?,
+            parts[2].parse::<u16>().map_err(|e| e.to_string())?,
+        ),
+
+        "pop" => Command::Pop(
+            MemorySegment::from_str(parts[1])?,
+            parts[2].parse::<u16>().map_err(|e| e.to_string())?,
+        ),
+
+        "add" => Command::Add,
+        "sub" => Command::Sub,
+        "neg" => Command::Neg,
+        "not" => Command::Not,
+        "or" => Command::Or,
+        "and" => Command::And,
+        "eq" => Command::Eq,
+        "lt" => Command::Lt,
+        "gt" => Command::Gt,
+
+        "label" => Command::Label(parts[1].to_owned()),
+        "goto" => Command::Goto(parts[1].to_owned()),
+        "if-goto" => Command::IfGoto(parts[1].to_owned()),
+
+        "function" => Command::Function(
+            parts[1].to_owned(),
+            parts[2].parse::<u16>().map_err(|e| e.to_string())?,
+        ),
+        "call" => Command::Call(
+            parts[1].to_owned(),
+            parts[2].parse::<u16>().map_err(|e| e.to_string())?,
+        ),
+        "return" => Command::Return,
+
+        _ => return Err(format!("Unknown command {}", parts[0])),
+    };
+
+    Ok(command)
+}
+
+impl Command {
     fn verify_offset(&self) {
         match self {
-            Command::Push { segment, offset } | Command::Pop { segment, offset } => {
+            Command::Push(segment, offset) | Command::Pop(segment, offset) => {
                 match segment {
                     MemorySegment::Static => {
                         if *offset > 238 {
@@ -223,12 +373,10 @@ impl FromStr for MemorySegment {
     }
 }
 
-fn jump_labels() -> (String, String) {
-    unsafe {
-        NEXTJUMP += 1;
+impl<W: Write> Drop for VMTranslator<W> {
+    fn drop(&mut self) {
+        if let Err(err) = self.writer.flush() {
+            panic!("Couldn't flush writer: {}", err)
+        }
     }
-    (
-        format!("JUMP_START_{}", unsafe { NEXTJUMP }),
-        format!("JUMP_END_{}", unsafe { NEXTJUMP }),
-    )
 }
